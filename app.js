@@ -1569,6 +1569,1247 @@
     });
   }
 
+  // ==================== الملف الشخصي ====================
+function loadProfilePage() {
+  if (!currentUser) { switchSection('home'); showToast('يجب تسجيل الدخول', false); return; }
+  const profileSection = document.getElementById('profile');
+  if (!profileSection) {
+    const main = document.querySelector('main');
+    if (!main) return;
+    const section = document.createElement('section');
+    section.id = 'profile'; section.className = 'section';
+    section.innerHTML = `<div class="card"><h2><i class="fas fa-user-circle"></i> ${t('profile')}</h2><div id="profileContent"></div></div>`;
+    main.appendChild(section);
+  }
+  renderProfileContent();
+}
+
+function renderProfileContent() {
+  const container = document.getElementById('profileContent');
+  if (!container) return;
+  const user = currentUser;
+  const currencySymbol = getCurrencySymbol(currentCurrency);
+  container.innerHTML = `
+    <div style="display:flex; flex-direction:column; align-items:center; margin-bottom:24px;">
+      <div style="position:relative;">
+        <img src="${user.profile_image || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.full_name || '') + '&size=100&background=38bdf8&color=fff'}" style="width:100px;height:100px;border-radius:50%;object-fit:cover;border:3px solid #38bdf8;">
+        <label for="profileImageUpload" style="position:absolute;bottom:0;right:0;background:#0f172a;color:white;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="fas fa-camera"></i></label>
+        <input type="file" id="profileImageUpload" accept="image/*" style="display:none;">
+      </div>
+      <h3 style="margin-top:12px;">${sanitizeInput(user.full_name || '')}</h3>
+      <p>${user.email} (${t(user.role)})</p>
+      ${(user.penalty_balance || 0) > 0 ? `<p style="color:#ef4444;font-weight:600;">رصيد الغرامات: ${user.penalty_balance.toFixed(2)} ${currencySymbol}</p>` : ''}
+    </div>
+    <form id="profileForm">
+      <div class="form-group"><label>${t('name')}</label><input type="text" id="profileName" value="${sanitizeInput(user.full_name || '')}" required></div>
+      <div class="form-group"><label>${t('email')}</label><input type="email" id="profileEmail" value="${user.email}" required></div>
+      <div class="form-group"><label>${t('phone')}</label><input type="tel" id="profilePhone" value="${user.phone || ''}"></div>
+      <button type="submit" class="btn btn-primary">${t('saveChanges')}</button>
+    </form>
+    <hr style="margin:24px 0;">
+    <h4>${t('changePassword')}</h4>
+    <form id="passwordForm">
+      <div class="form-group"><label>${t('currentPassword')}</label><input type="password" id="currentPassword" required></div>
+      <div class="form-group"><label>${t('newPassword')}</label><input type="password" id="newPassword" required></div>
+      <div class="form-group"><label>${t('confirmPassword')}</label><input type="password" id="confirmPassword" required></div>
+      <button type="submit" class="btn btn-primary">${t('changePassword')}</button>
+    </form>
+  `;
+
+  document.getElementById('profileImageUpload')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      try {
+        const base64 = await compressImage(file, 400, 0.7);
+        const publicUrl = await uploadImage(base64, 'profiles');
+        currentUser.profile_image = publicUrl;
+        await supabase.from('profiles').update({ profile_image: publicUrl }).eq('id', currentUser.id);
+        renderProfileContent();
+        updateUserArea();
+        showToast('تم تحديث الصورة الشخصية');
+      } catch (err) {
+        showToast('فشل رفع الصورة', false);
+      }
+    }
+  });
+
+  document.getElementById('profileForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = sanitizeInput(document.getElementById('profileName')?.value?.trim() || '');
+    const email = document.getElementById('profileEmail')?.value?.trim() || '';
+    const phone = document.getElementById('profilePhone')?.value?.trim() || '';
+    if (email !== currentUser.email && users.some(u => u.email === email && u.id !== currentUser.id)) {
+      showToast('البريد الإلكتروني مستخدم مسبقاً', false);
+      return;
+    }
+    currentUser.full_name = name; currentUser.email = email; currentUser.phone = phone;
+    await supabase.from('profiles').update({ full_name: name, email, phone }).eq('id', currentUser.id);
+    updateUserArea();
+    showToast('تم تحديث الملف الشخصي');
+  });
+
+  document.getElementById('passwordForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const currentPass = document.getElementById('currentPassword')?.value || '';
+    const newPass = document.getElementById('newPassword')?.value || '';
+    const confirmPass = document.getElementById('confirmPassword')?.value || '';
+    if (newPass !== confirmPass) { showToast('كلمة المرور الجديدة غير متطابقة', false); return; }
+    if (newPass.length < 6) { showToast('كلمة المرور يجب أن تكون 6 أحرف على الأقل', false); return; }
+    const { error } = await supabase.auth.updateUser({ password: newPass });
+    if (error) { showToast('فشل تغيير كلمة المرور: ' + error.message, false); return; }
+    document.getElementById('passwordForm')?.reset();
+    showToast('تم تغيير كلمة المرور بنجاح');
+  });
+}
+
+// ==================== صفحة المفضلة ====================
+function loadFavoritesPage() {
+  if (!currentUser) { switchSection('home'); showToast(t('loginRequired'), false); return; }
+  const section = document.getElementById('favorites');
+  if (!section) {
+    const main = document.querySelector('main');
+    if (!main) return;
+    const el = document.createElement('section');
+    el.id = 'favorites'; el.className = 'section';
+    el.innerHTML = `<div class="card"><h2><i class="fas fa-heart"></i> ${t('favorites')}</h2><div id="favoritesContent"></div></div>`;
+    main.appendChild(el);
+  }
+  renderFavoritesContent();
+}
+
+function renderFavoritesContent() {
+  const container = document.getElementById('favoritesContent');
+  if (!container) return;
+  const userFavorites = favorites.filter(f => f.user_id === currentUser.id);
+  if (!userFavorites.length) { container.innerHTML = `<p>${t('noFavorites')}</p>`; return; }
+  const currencySymbol = getCurrencySymbol(currentCurrency);
+  let html = '<div class="venues-grid">';
+  userFavorites.forEach(fav => {
+    if (fav.item_type === 'venue') {
+      const venue = venues.find(v => v.id === fav.item_id);
+      if (!venue) return;
+      const minPrice = Math.min(...(venue.pricing || [50]));
+      const avg = (reviews[venue.id] || []).length ? ((reviews[venue.id] || []).reduce((s, r) => s + r.rating, 0) / (reviews[venue.id] || []).length).toFixed(1) : '0.0';
+      html += `<div class="venue-card">
+        <div class="venue-img" style="background-image:url('${venue.image_url || ''}')">
+          <button class="favorite-btn" onclick="window.toggleFavorite('venue','${venue.id}')"><i class="fas fa-heart" style="color:#ef4444;"></i></button>
+        </div>
+        <div class="venue-info">
+          <div class="venue-name">${sanitizeInput(venue.name)}</div>
+          <div class="venue-rating">${'★'.repeat(Math.round(avg))} ${avg}</div>
+          <div class="venue-pricing">${t('from')} ${minPrice} ${currencySymbol}/${t('hour')}</div>
+          <button class="btn btn-primary view-venue-btn" data-venue-id="${venue.id}">${t('viewCourts')}</button>
+        </div>
+      </div>`;
+    } else {
+      const coach = coaches.find(c => c.id === fav.item_id);
+      if (!coach) return;
+      const avg = (coachReviews[coach.id] || []).length ? ((coachReviews[coach.id] || []).reduce((s, r) => s + r.rating, 0) / (coachReviews[coach.id] || []).length).toFixed(1) : '0.0';
+      html += `<div class="coach-card">
+        <div class="coach-img" style="background-image:url('${coach.image_url || ''}')">
+          <button class="favorite-btn" onclick="window.toggleFavorite('coach','${coach.id}')"><i class="fas fa-heart" style="color:#ef4444;"></i></button>
+        </div>
+        <div class="coach-info">
+          <div class="coach-name">${sanitizeInput(coach.name)}</div>
+          <div class="coach-rating">${'★'.repeat(Math.round(avg))} ${avg}</div>
+          <div class="coach-pricing">${coach.hourly_rate} ${currencySymbol}/${t('hour')}</div>
+          <button class="btn btn-primary book-coach-btn" data-coach-id="${coach.id}">${t('bookSession')}</button>
+        </div>
+      </div>`;
+    }
+  });
+  html += '</div>';
+  container.innerHTML = html;
+  container.querySelectorAll('.view-venue-btn').forEach(b => b.addEventListener('click', () => { currentViewMode = 'courts'; switchSection('home'); }));
+  container.querySelectorAll('.book-coach-btn').forEach(b => b.addEventListener('click', () => { currentViewMode = 'coaches'; switchSection('home'); setTimeout(() => openBookingModal(b.dataset.coachId, 'coach'), 100); }));
+}
+
+// ==================== التحليلات (محسنة) ====================
+async function loadAnalyticsDashboard() {
+  if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'venue' && currentUser.role !== 'coach')) {
+    showToast(t('unauthorized'), false); return;
+  }
+  const section = document.getElementById('analytics');
+  if (!section) {
+    const main = document.querySelector('main');
+    if (!main) return;
+    const el = document.createElement('section');
+    el.id = 'analytics'; el.className = 'section';
+    el.innerHTML = `<div class="card"><h2><i class="fas fa-chart-bar"></i> ${t('analytics')}</h2><div id="analyticsContent"></div></div>`;
+    main.appendChild(el);
+  }
+  await renderAnalyticsContent();
+}
+
+// ... (renderAnalyticsContent تستخدم الكود الموجود سابقًا مع تعديل fetch من Supabase)
+  // ==================== تعديل المنشأة ====================
+window.openEditVenueModal = async function(venueId) {
+  const venue = venues.find(v => v.id === venueId);
+  if (!venue) return;
+  if (currentUser.role !== 'admin' && venue.owner_id !== currentUser.id) return showToast('غير مصرح', false);
+  document.getElementById('editVenueId').value = venue.id;
+  document.getElementById('editVenueName').value = venue.name;
+  document.getElementById('editVenueDesc').value = venue.description || '';
+  document.getElementById('editVenuePhone').value = venue.phone || '';
+  document.getElementById('editVenueLat').value = venue.lat || '';
+  document.getElementById('editVenueLng').value = venue.lng || '';
+  if (venue.pricing) {
+    document.getElementById('editPricePeriod1').value = venue.pricing[0];
+    document.getElementById('editPricePeriod2').value = venue.pricing[1];
+    document.getElementById('editPricePeriod3').value = venue.pricing[2];
+    document.getElementById('editPricePeriod4').value = venue.pricing[3];
+  }
+  document.getElementById('venueHasCapacity').checked = venue.has_capacity || false;
+  document.getElementById('capacityFields').style.display = venue.has_capacity ? 'block' : 'none';
+  document.getElementById('venueMaxCapacity').value = venue.max_capacity || 10;
+  document.getElementById('venueAllowSharing').checked = venue.allow_sharing ?? true;
+
+  // إعادة بناء الخريطة المصغرة
+  if (editMiniMap) { editMiniMap.remove(); editMiniMap = null; }
+  const lat = venue.lat || 24.7136, lng = venue.lng || 46.6753;
+  editMiniMap = L.map('editMiniMap').setView([lat, lng], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(editMiniMap);
+  editMarker = L.marker([lat, lng], { draggable: true }).addTo(editMiniMap);
+  function update() {
+    const ll = editMarker.getLatLng();
+    document.getElementById('editVenueLat').value = ll.lat.toFixed(6);
+    document.getElementById('editVenueLng').value = ll.lng.toFixed(6);
+  }
+  editMarker.on('dragend', update);
+  editMiniMap.on('click', e => { editMarker.setLatLng(e.latlng); update(); });
+  update();
+  document.getElementById('editVenueModal').style.visibility = 'visible';
+};
+
+document.getElementById('editVenueForm')?.addEventListener('submit', async e => {
+  e.preventDefault();
+  const id = document.getElementById('editVenueId').value;
+  const venue = venues.find(v => v.id === id);
+  if (!venue) return;
+  venue.name = sanitizeInput(document.getElementById('editVenueName').value.trim());
+  venue.description = sanitizeInput(document.getElementById('editVenueDesc').value);
+  venue.phone = document.getElementById('editVenuePhone').value;
+  venue.lat = parseFloat(document.getElementById('editVenueLat').value);
+  venue.lng = parseFloat(document.getElementById('editVenueLng').value);
+  venue.pricing = [
+    +document.getElementById('editPricePeriod1').value,
+    +document.getElementById('editPricePeriod2').value,
+    +document.getElementById('editPricePeriod3').value,
+    +document.getElementById('editPricePeriod4').value
+  ];
+  venue.has_capacity = document.getElementById('venueHasCapacity')?.checked || false;
+  venue.max_capacity = venue.has_capacity ? parseInt(document.getElementById('venueMaxCapacity')?.value || '10') : null;
+  venue.allow_sharing = document.getElementById('venueAllowSharing')?.checked ?? true;
+
+  const imgFile = document.getElementById('editVenueImage').files[0];
+  if (imgFile) {
+    try {
+      const base64 = await compressImage(imgFile, 800, 0.6);
+      venue.image_url = await uploadImage(base64, 'venues');
+    } catch (err) {}
+  }
+  await api.saveVenue(venue);
+  showToast('تم التحديث');
+  document.getElementById('editVenueModal').style.visibility = 'hidden';
+  if (document.getElementById('adminDashboard')?.classList.contains('active')) loadAdminDashboard('venues');
+  if (document.getElementById('venueDashboard')?.classList.contains('active')) loadVenueDashboard();
+});
+
+// ==================== مودال الملعب ====================
+window.openCourtModal = async function(courtId = null, venueId = null) {
+  const modal = document.getElementById('courtModal');
+  if (!modal) return;
+  document.getElementById('courtForm').reset();
+  document.getElementById('singleSportGroup').style.display = 'block';
+  document.getElementById('multiSportGroup').style.display = 'none';
+  document.getElementById('customPricingGroup').style.display = 'none';
+  if (courtId) {
+    const court = courts.find(c => c.id === courtId);
+    if (!court) return;
+    document.getElementById('courtModalTitle').textContent = 'تعديل ملعب';
+    document.getElementById('courtId').value = court.id;
+    document.getElementById('courtVenueId').value = court.venue_id;
+    document.getElementById('courtName').value = court.name;
+    document.getElementById('courtType').value = court.multi_sport ? 'multi' : 'single';
+    if (court.multi_sport) {
+      document.getElementById('singleSportGroup').style.display = 'none';
+      document.getElementById('multiSportGroup').style.display = 'block';
+      court.allowed_sports?.forEach(s => {
+        const cb = document.querySelector(`#multiSportCheckboxes input[value="${s}"]`);
+        if (cb) cb.checked = true;
+      });
+    } else {
+      document.getElementById('courtSport').value = court.sport;
+    }
+    if (court.pricing) {
+      document.getElementById('useCustomPricing').checked = true;
+      document.getElementById('customPricingGroup').style.display = 'block';
+      document.getElementById('courtPrice1').value = court.pricing[0];
+      document.getElementById('courtPrice2').value = court.pricing[1];
+      document.getElementById('courtPrice3').value = court.pricing[2];
+      document.getElementById('courtPrice4').value = court.pricing[3];
+    }
+  } else {
+    document.getElementById('courtModalTitle').textContent = 'إضافة ملعب';
+    document.getElementById('courtId').value = '';
+    document.getElementById('courtVenueId').value = venueId;
+  }
+  modal.style.visibility = 'visible';
+};
+
+document.getElementById('courtForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const courtId = document.getElementById('courtId')?.value;
+  const venueId = document.getElementById('courtVenueId')?.value;
+  const name = sanitizeInput(document.getElementById('courtName')?.value?.trim() || '');
+  const type = document.getElementById('courtType')?.value || 'single';
+  const sport = type === 'single' ? document.getElementById('courtSport')?.value : null;
+  const allowed = type === 'multi' ? Array.from(document.querySelectorAll('#multiSportCheckboxes input:checked')).map(cb => cb.value) : [];
+  let pricing = null;
+  if (document.getElementById('useCustomPricing')?.checked) {
+    pricing = [
+      +document.getElementById('courtPrice1')?.value || 40,
+      +document.getElementById('courtPrice2')?.value || 50,
+      +document.getElementById('courtPrice3')?.value || 60,
+      +document.getElementById('courtPrice4')?.value || 70
+    ];
+  }
+  const courtData = { name, venue_id: venueId, multi_sport: type === 'multi', sport, allowed_sports: allowed, pricing };
+  if (courtId) {
+    courtData.id = courtId;
+  }
+  await api.saveCourt(courtData);
+  document.getElementById('courtModal').style.visibility = 'hidden';
+  if (document.getElementById('venueDashboard')?.classList.contains('active')) loadVenueDashboard();
+  await refreshData();
+});
+
+// ==================== ساعات عمل المدرب ====================
+window.openCoachAvailabilityModal = async function(coachId) {
+  const container = document.getElementById('coachWorkingHoursContainer');
+  if (!container) return;
+  const { data: availability } = await supabase.from('coach_availability').select('*').eq('coach_id', coachId);
+  const map = {};
+  availability?.forEach(a => { map[a.day_of_week] = { start: a.start_time, end: a.end_time }; });
+  let html = '';
+  WEEKDAYS.forEach(day => {
+    const val = map[day.key] || { start: '', end: '' };
+    html += `<div style="display:flex;align-items:center;gap:8px;"><span style="width:80px;">${day.label}</span>
+      <input type="time" id="wh_${day.key}_start" value="${val.start}" style="width:120px;">
+      <input type="time" id="wh_${day.key}_end" value="${val.end}" style="width:120px;"></div>`;
+  });
+  container.innerHTML = html;
+  document.getElementById('coachAvailabilityModal').style.visibility = 'visible';
+  document.getElementById('saveCoachAvailabilityBtn').onclick = async () => {
+    const rows = [];
+    WEEKDAYS.forEach(day => {
+      const start = document.getElementById(`wh_${day.key}_start`)?.value;
+      const end = document.getElementById(`wh_${day.key}_end`)?.value;
+      if (start && end) rows.push({ coach_id: coachId, day_of_week: day.key, start_time: start, end_time: end });
+    });
+    await supabase.from('coach_availability').delete().eq('coach_id', coachId);
+    if (rows.length) await supabase.from('coach_availability').insert(rows);
+    document.getElementById('coachAvailabilityModal').style.visibility = 'hidden';
+    showToast('تم حفظ ساعات العمل');
+  };
+};
+
+// ==================== المتجر ====================
+window.openStoreModal = function(storeId = null) {
+  document.getElementById('storeForm').reset();
+  document.getElementById('storeId').value = '';
+  if (storeId) {
+    const store = stores.find(s => s.id === storeId);
+    if (!store) return;
+    document.getElementById('storeModalTitle').textContent = 'تعديل متجر';
+    document.getElementById('storeId').value = store.id;
+    document.getElementById('storeName').value = store.name;
+    document.getElementById('storePhone').value = store.phone;
+  } else {
+    document.getElementById('storeModalTitle').textContent = 'إضافة متجر';
+  }
+  document.getElementById('storeModal').style.visibility = 'visible';
+};
+
+document.getElementById('storeForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const storeId = document.getElementById('storeId').value;
+  const name = sanitizeInput(document.getElementById('storeName').value.trim());
+  const phone = document.getElementById('storePhone').value.trim();
+  const imageFile = document.getElementById('storeImage').files[0];
+  let image_url = '';
+  if (imageFile) {
+    try {
+      const base64 = await compressImage(imageFile, 400, 0.7);
+      image_url = await uploadImage(base64, 'stores');
+    } catch (err) {}
+  }
+  const storeData = { name, phone, owner_id: currentUser.id };
+  if (image_url) storeData.image_url = image_url;
+  if (storeId) {
+    storeData.id = storeId;
+  }
+  await api.saveStore(storeData);
+  document.getElementById('storeModal').style.visibility = 'hidden';
+  loadAdminDashboard('stores');
+});
+
+// ==================== المنتج ====================
+window.openProductModal = function(productId = null) {
+  const storeSelect = document.getElementById('productStore');
+  storeSelect.innerHTML = '<option value="">-- اختر متجراً --</option>';
+  stores.forEach(s => storeSelect.innerHTML += `<option value="${s.id}">${sanitizeInput(s.name)}</option>`);
+  document.getElementById('productForm').reset();
+  document.getElementById('productId').value = '';
+  if (productId) {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+    document.getElementById('productModalTitle').textContent = 'تعديل منتج';
+    document.getElementById('productId').value = product.id;
+    document.getElementById('productName').value = product.name;
+    document.getElementById('productPrice').value = product.price;
+    document.getElementById('productDescription').value = product.description || '';
+    document.getElementById('productStore').value = product.store_id;
+  } else {
+    document.getElementById('productModalTitle').textContent = 'إضافة منتج';
+  }
+  document.getElementById('productModal').style.visibility = 'visible';
+};
+
+document.getElementById('productForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const productId = document.getElementById('productId').value;
+  const name = sanitizeInput(document.getElementById('productName').value.trim());
+  const price = parseFloat(document.getElementById('productPrice').value);
+  const description = sanitizeInput(document.getElementById('productDescription').value.trim());
+  const storeId = document.getElementById('productStore').value;
+  const imageFile = document.getElementById('productImage').files[0];
+  let image_url = '';
+  if (imageFile) {
+    try {
+      const base64 = await compressImage(imageFile, 400, 0.7);
+      image_url = await uploadImage(base64, 'products');
+    } catch (err) {}
+  }
+  const productData = { name, price, description, store_id: storeId };
+  if (image_url) productData.image_url = image_url;
+  if (productId) productData.id = productId;
+  await api.saveProduct(productData);
+  document.getElementById('productModal').style.visibility = 'hidden';
+  loadAdminDashboard('products');
+  if (document.getElementById('store')?.classList.contains('active')) loadStore();
+});
+
+// ==================== الفرق ====================
+window.openTeamModal = function(teamId = null) {
+  document.getElementById('teamSport').innerHTML = getSportOptions();
+  document.getElementById('teamForm').reset();
+  document.getElementById('teamId').value = '';
+  if (teamId) {
+    const team = teams.find(t => t.id === teamId);
+    if (!team) return;
+    document.getElementById('teamModalTitle').textContent = 'تعديل فريق';
+    document.getElementById('teamId').value = team.id;
+    document.getElementById('teamName').value = team.name;
+    document.getElementById('teamSport').value = team.sport;
+    document.getElementById('teamMaxMembers').value = team.max_members || 5;
+    document.getElementById('teamDesc').value = team.description || '';
+  } else {
+    document.getElementById('teamModalTitle').textContent = 'إنشاء فريق';
+  }
+  document.getElementById('teamModal').style.visibility = 'visible';
+};
+
+document.getElementById('teamForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const teamId = document.getElementById('teamId').value;
+  const name = sanitizeInput(document.getElementById('teamName').value.trim());
+  const sport = document.getElementById('teamSport').value;
+  const maxMembers = parseInt(document.getElementById('teamMaxMembers').value) || 5;
+  const desc = sanitizeInput(document.getElementById('teamDesc').value);
+  const logoFile = document.getElementById('teamLogo').files[0];
+  let logo_url = '';
+  if (logoFile) {
+    try {
+      const base64 = await compressImage(logoFile, 400, 0.7);
+      logo_url = await uploadImage(base64, 'teams');
+    } catch (err) {}
+  }
+  const teamData = { name, sport, description: desc, max_members: maxMembers, owner_id: currentUser.id };
+  if (logo_url) teamData.logo_url = logo_url;
+  if (teamId) teamData.id = teamId;
+  await api.saveTeam(teamData);
+  document.getElementById('teamModal').style.visibility = 'hidden';
+  if (document.getElementById('teams')?.classList.contains('active')) loadTeams();
+  await refreshData();
+});
+
+// ==================== إدارة أعضاء الفريق ====================
+window.openTeamMembersModal = function(teamId) {
+  const team = teams.find(t => t.id === teamId);
+  if (!team || team.owner_id !== currentUser?.id) { showToast('غير مصرح', false); return; }
+  const members = teamMembers.filter(m => m.team_id === teamId);
+  let listHtml = members.map(m => `
+    <div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #eee;">
+      <span>${sanitizeInput(m.user_name)}</span>
+      <button class="btn-outline btn-sm remove-member-btn" data-member-id="${m.id}"><i class="fas fa-trash"></i></button>
+    </div>
+  `).join('');
+  const modal = document.createElement('div');
+  modal.className = 'modal'; modal.style.visibility = 'visible';
+  modal.innerHTML = `<div class="modal-card"><h3>أعضاء ${sanitizeInput(team.name)}</h3>${listHtml || '<p>لا يوجد أعضاء</p>'}<button id="closeTeamMembersModal" class="btn-outline">إغلاق</button></div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('#closeTeamMembersModal').addEventListener('click', () => modal.remove());
+  modal.querySelectorAll('.remove-member-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api.removeTeamMember(btn.dataset.memberId);
+      teamMembers = teamMembers.filter(m => m.id !== btn.dataset.memberId);
+      modal.remove();
+      window.openTeamMembersModal(teamId);
+    });
+  });
+};
+
+// ==================== دعوات المباريات ====================
+function createInvitation() {
+  if (!currentUser) return showToast('يجب تسجيل الدخول', false);
+  document.getElementById('invitationSport').innerHTML = getSportOptions();
+  document.getElementById('invitationCourt').innerHTML = '<option value="">-- لا يوجد --</option>' +
+    courts.map(c => `<option value="${c.id}">${sanitizeInput(c.name)}</option>`).join('');
+  document.getElementById('invitationId').value = '';
+  document.getElementById('invitationTitle').value = '';
+  document.getElementById('invitationDateTime').value = '';
+  document.getElementById('invitationDuration').value = '1';
+  document.getElementById('invitationPlayers').value = '2';
+  document.getElementById('invitationNotes').value = '';
+  document.getElementById('invitationModal').style.visibility = 'visible';
+}
+
+document.getElementById('invitationForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = sanitizeInput(document.getElementById('invitationTitle')?.value?.trim() || '');
+  const sport = document.getElementById('invitationSport')?.value;
+  const dateTime = document.getElementById('invitationDateTime')?.value;
+  const duration = parseInt(document.getElementById('invitationDuration')?.value || '1');
+  const playersNeeded = parseInt(document.getElementById('invitationPlayers')?.value || '2');
+  const courtId = document.getElementById('invitationCourt')?.value || '';
+  const notes = sanitizeInput(document.getElementById('invitationNotes')?.value || '');
+  if (!title || !sport || !dateTime) return showToast('الرجاء تعبئة الحقول المطلوبة', false);
+  const court = courts.find(c => c.id === courtId);
+  await api.saveInvitation({
+    title, sport, date_time: dateTime, duration, players_needed: playersNeeded,
+    court_id: courtId || null, court_name: court ? court.name : '', notes,
+    creator_id: currentUser.id, creator_name: currentUser.full_name, joined_players: []
+  });
+  document.getElementById('invitationModal').style.visibility = 'hidden';
+  if (document.getElementById('openInvitations')?.classList.contains('active')) loadOpenInvitations();
+});
+
+document.getElementById('createInvitationBtn')?.addEventListener('click', createInvitation);
+document.getElementById('closeInvitationModal')?.addEventListener('click', () => {
+  document.getElementById('invitationModal').style.visibility = 'hidden';
+});
+
+// ==================== الإغلاقات (Blackouts) ====================
+function openBlackoutModal(type, id) {
+  const modal = document.createElement('div');
+  modal.className = 'modal'; modal.style.visibility = 'visible'; modal.style.zIndex = '2000';
+  const item = type === 'court' ? courts.find(c => c.id === id) : coaches.find(c => c.id === id);
+  modal.innerHTML = `
+    <div class="modal-card" style="max-width:500px;">
+      <h3><i class="fas fa-ban"></i> إغلاق ${type === 'court' ? 'الملعب' : 'المدرب'}: ${sanitizeInput(item?.name || '')}</h3>
+      <div class="form-group"><label>نوع الإغلاق</label><select id="blackoutTypeSelect"><option value="day">يوم كامل</option><option value="hour">ساعات محددة</option></select></div>
+      <div class="form-group"><label>التاريخ</label><input type="date" id="blackoutDate" required></div>
+      <div id="hourSelectionGroup" style="display:none;"><div class="form-group"><label>ساعة البداية</label><input type="time" id="blackoutStartHour"></div><div class="form-group"><label>المدة (ساعات)</label><input type="number" id="blackoutDuration" min="1" max="24" value="1"></div></div>
+      <div class="form-group"><label>سبب الإغلاق (اختياري)</label><input type="text" id="blackoutReason"></div>
+      <button id="saveBlackoutBtn" class="btn btn-primary">حفظ</button>
+      <button id="closeBlackoutModalBtn" class="btn-outline">إلغاء</button>
+      <hr><h4>الإغلاقات الحالية</h4><div id="existingBlackoutsList"></div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const typeSelect = modal.querySelector('#blackoutTypeSelect');
+  const hourGroup = modal.querySelector('#hourSelectionGroup');
+  typeSelect.addEventListener('change', e => hourGroup.style.display = e.target.value === 'hour' ? 'block' : 'none');
+
+  const renderBlackouts = async () => {
+    const list = modal.querySelector('#existingBlackoutsList');
+    const { data } = await supabase.from('blackouts').select('*').eq('item_type', type).eq('item_id', id);
+    if (!data?.length) { list.innerHTML = '<p>لا توجد إغلاقات</p>'; return; }
+    list.innerHTML = data.map((b, idx) => `<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #eee;">
+      <div>${b.date} - ${b.type === 'day' ? 'يوم كامل' : `${b.start_hour} (${b.duration} ساعة)`} ${b.reason ? `<br><small>${b.reason}</small>` : ''}</div>
+      <button class="btn-outline btn-sm delete-blackout-btn" data-id="${b.id}"><i class="fas fa-trash"></i></button>
+    </div>`).join('');
+    modal.querySelectorAll('.delete-blackout-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await supabase.from('blackouts').delete().eq('id', btn.dataset.id);
+        renderBlackouts();
+      });
+    });
+  };
+  renderBlackouts();
+
+  modal.querySelector('#saveBlackoutBtn').addEventListener('click', async () => {
+    const date = modal.querySelector('#blackoutDate').value;
+    const bType = typeSelect.value;
+    const reason = modal.querySelector('#blackoutReason').value;
+    if (!date) return showToast('اختر التاريخ', false);
+    const record = { item_type: type, item_id: id, date, reason };
+    if (bType === 'hour') {
+      record.start_hour = modal.querySelector('#blackoutStartHour').value;
+      record.duration = parseInt(modal.querySelector('#blackoutDuration').value);
+    }
+    await supabase.from('blackouts').insert(record);
+    modal.querySelector('#blackoutDate').value = '';
+    modal.querySelector('#blackoutReason').value = '';
+    renderBlackouts();
+  });
+
+  modal.querySelector('#closeBlackoutModalBtn').addEventListener('click', () => modal.remove());
+}
+
+// ==================== الحجوزات المتكررة ====================
+function generateRecurringDates(startDate, endDate, pattern) {
+  const dates = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  let current = new Date(start);
+  while (current <= end) {
+    dates.push(current.toISOString().split('T')[0]);
+    current.setDate(current.getDate() + (pattern === 'weekly' ? 7 : 14));
+  }
+  return dates;
+}
+
+async function createRecurringBookings(baseData, recurringPattern, endDate) {
+  const dates = generateRecurringDates(baseData.date, endDate, recurringPattern);
+  if (!dates.length) return [];
+  const groupId = crypto.randomUUID();
+  const items = [];
+  for (const date of dates) {
+    const item = { ...baseData, date, recurring_group_id: groupId };
+    const conflict = baseData.type === 'court' ?
+      await checkCourtConflict(baseData.courtId, date, baseData.time, baseData.duration) :
+      await checkCoachConflict(baseData.coachId, date, baseData.time, baseData.duration);
+    if (!conflict) items.push(item);
+  }
+  if (items.length) {
+    await supabase.from('recurring_groups').insert({
+      id: groupId, type: baseData.type, start_date: baseData.date,
+      end_date: endDate, pattern: recurringPattern, count: items.length
+    });
+  }
+  return items;
+}
+
+// ==================== تصدير/استيراد البيانات ====================
+async function exportAllData() {
+  const data = {
+    venues, courts, coaches, bookings, coachBookings, users, notifications, promoCodes,
+    favorites, openInvitations, stores, products, storeOrders, teams, teamMembers,
+    teamInvitations, reviews: {}, coachReviews: {}, customerReviews: {}
+  };
+  // تجميع التقييمات
+  (await supabase.from('venue_reviews').select('*')).data?.forEach(r => {
+    if (!data.reviews[r.venue_id]) data.reviews[r.venue_id] = [];
+    data.reviews[r.venue_id].push(r);
+  });
+  (await supabase.from('coach_reviews').select('*')).data?.forEach(r => {
+    if (!data.coachReviews[r.coach_id]) data.coachReviews[r.coach_id] = [];
+    data.coachReviews[r.coach_id].push(r);
+  });
+  (await supabase.from('customer_reviews').select('*')).data?.forEach(r => {
+    if (!data.customerReviews[r.booking_id]) data.customerReviews[r.booking_id] = [];
+    data.customerReviews[r.booking_id].push(r);
+  });
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `backup_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+}
+
+async function importAllData(file) {
+  try {
+    const text = await file.text();
+    const imported = JSON.parse(text);
+    if (!imported.venues || !imported.bookings || !imported.users) throw new Error('بنية غير صالحة');
+    if (!confirm('استبدال جميع البيانات؟')) return;
+    // حذف جميع البيانات الحالية ثم إعادة إدخال المستوردة
+    await supabase.from('bookings').delete().neq('id','0');
+    await supabase.from('coach_bookings').delete().neq('id','0');
+    await supabase.from('venues').delete().neq('id','0');
+    // ... أكمل لباقي الجداول
+    showToast('تم الاستيراد');
+    await refreshData();
+  } catch (err) { showToast('خطأ: '+err.message, false); }
+}
+
+// ربط الأزرار (إن وجدت في HTML)
+document.getElementById('exportDataBtn')?.addEventListener('click', exportAllData);
+document.getElementById('importFileInput')?.addEventListener('change', e => {
+  if (e.target.files[0]) importAllData(e.target.files[0]);
+});
+
+  // ==================== دوال الخرائط (للتسجيل) ====================
+function initRegisterMiniMap() {
+  if (miniMap) return;
+  const mapEl = document.getElementById('registerMiniMap');
+  if (!mapEl) return;
+  miniMap = L.map('registerMiniMap').setView([24.7136, 46.6753], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(miniMap);
+  venueMarker = L.marker([24.7136, 46.6753], { draggable: true }).addTo(miniMap);
+  function update() {
+    const ll = venueMarker.getLatLng();
+    document.getElementById('venueLat').value = ll.lat.toFixed(6);
+    document.getElementById('venueLng').value = ll.lng.toFixed(6);
+  }
+  venueMarker.on('dragend', update);
+  miniMap.on('click', e => { venueMarker.setLatLng(e.latlng); update(); });
+  update();
+}
+
+function initCoachRegisterMap() {
+  if (coachMap) return;
+  const mapEl = document.getElementById('coachRegisterMap');
+  if (!mapEl) return;
+  coachMap = L.map('coachRegisterMap').setView([24.7136, 46.6753], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(coachMap);
+  coachMarker = L.marker([24.7136, 46.6753], { draggable: true }).addTo(coachMap);
+  function update() {
+    const ll = coachMarker.getLatLng();
+    document.getElementById('coachLat').value = ll.lat.toFixed(6);
+    document.getElementById('coachLng').value = ll.lng.toFixed(6);
+  }
+  coachMarker.on('dragend', update);
+  coachMap.on('click', e => { coachMarker.setLatLng(e.latlng); update(); });
+  update();
+}
+
+// ==================== تسجيل منشأة (مع رفع الصورة إلى Supabase) ====================
+document.getElementById('registerVenueForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!currentUser || (currentUser.role !== 'venue' && currentUser.role !== 'admin')) return showToast('يجب تسجيل الدخول', false);
+
+  const name = sanitizeInput(document.getElementById('venueName')?.value?.trim() || '');
+  const lat = parseFloat(document.getElementById('venueLat')?.value);
+  const lng = parseFloat(document.getElementById('venueLng')?.value);
+  if (!name || isNaN(lat) || isNaN(lng)) return showToast('يرجى إدخال الاسم وتحديد الموقع', false);
+
+  const phone = document.getElementById('venuePhone')?.value || '';
+  const desc = sanitizeInput(document.getElementById('venueDesc')?.value || '');
+  const pricing = [
+    +document.getElementById('pricePeriod1')?.value || 40,
+    +document.getElementById('pricePeriod2')?.value || 50,
+    +document.getElementById('pricePeriod3')?.value || 60,
+    +document.getElementById('pricePeriod4')?.value || 70
+  ];
+  const hasCapacity = document.getElementById('regVenueHasCapacity')?.checked || false;
+  const maxCapacity = hasCapacity ? parseInt(document.getElementById('regVenueMaxCapacity')?.value || '10') : null;
+  const allowSharing = document.getElementById('regVenueAllowSharing')?.checked ?? true;
+  const requiresApproval = false; // يمكن إضافة حقل إذا أردت
+
+  const imageFile = document.getElementById('venueImage')?.files?.[0];
+  let imageUrl = '';
+  if (imageFile) {
+    try {
+      const base64 = await compressImage(imageFile, 800, 0.6);
+      imageUrl = await uploadImage(base64, 'venues');
+    } catch (err) {
+      console.error('فشل رفع الصورة:', err);
+      imageUrl = '';
+    }
+  }
+
+  const newVenue = {
+    name, phone, lat, lng, description: desc, pricing, has_capacity: hasCapacity,
+    max_capacity: maxCapacity, allow_sharing: allowSharing, requires_approval: requiresApproval,
+    owner_id: currentUser.id, image_url: imageUrl
+  };
+
+  try {
+    const { data: savedVenue } = await supabase.from('venues').insert(newVenue).select().single();
+    if (!savedVenue) throw new Error('لم يتم حفظ المنشأة');
+    showToast('تم تسجيل المنشأة بنجاح');
+
+    // إضافة الملاعب المرافقة
+    const courtItems = document.querySelectorAll('.court-item');
+    const newCourts = [];
+    courtItems.forEach((item, idx) => {
+      const courtType = item.querySelector(`[name="courtType${idx}"]`)?.value || 'single';
+      const courtName = item.querySelector(`[name="courtName${idx}"]`)?.value || `ملعب ${idx+1}`;
+      const court = {
+        venue_id: savedVenue.id,
+        name: sanitizeInput(courtName),
+        multi_sport: courtType === 'multi',
+        sport: courtType === 'single' ? (item.querySelector(`[name="courtSport${idx}"]`)?.value || null) : null,
+        allowed_sports: courtType === 'multi' ? Array.from(item.querySelectorAll(`[name="allowedSport${idx}"]:checked`)).map(cb => cb.value) : [],
+        pricing: null
+      };
+      const useCustom = item.querySelector(`[name="useCustomPricing${idx}"]`)?.checked;
+      if (useCustom) {
+        court.pricing = [
+          +item.querySelector(`[name="price1_${idx}"]`)?.value || 40,
+          +item.querySelector(`[name="price2_${idx}"]`)?.value || 50,
+          +item.querySelector(`[name="price3_${idx}"]`)?.value || 60,
+          +item.querySelector(`[name="price4_${idx}"]`)?.value || 70
+        ];
+      }
+      newCourts.push(court);
+    });
+    if (newCourts.length > 0) {
+      await supabase.from('courts').insert(newCourts);
+    }
+
+    document.getElementById('registerVenueForm').reset();
+    document.getElementById('courtsListContainer').innerHTML = '';
+    createCourtField(); // تحتاج إلى تعريف createCourtField
+    if (miniMap && venueMarker) {
+      miniMap.setView([24.7136, 46.6753], 13);
+      venueMarker.setLatLng([24.7136, 46.6753]);
+    }
+    await refreshData();
+    switchSection(currentUser.role === 'admin' ? 'adminDashboard' : 'venueDashboard');
+  } catch (err) {
+    console.error(err);
+    showToast('فشل تسجيل المنشأة', false);
+  }
+});
+
+// ==================== تسجيل مدرب خصوصي ====================
+document.getElementById('registerCoachForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!currentUser || (currentUser.role !== 'coach' && currentUser.role !== 'admin')) return showToast('يجب تسجيل الدخول', false);
+
+  const name = sanitizeInput(document.getElementById('coachName')?.value?.trim() || '');
+  const lat = parseFloat(document.getElementById('coachLat')?.value);
+  const lng = parseFloat(document.getElementById('coachLng')?.value);
+  if (!name || isNaN(lat) || isNaN(lng)) return showToast('يرجى إدخال الاسم وتحديد الموقع', false);
+
+  const phone = document.getElementById('coachPhone')?.value || '';
+  const desc = sanitizeInput(document.getElementById('coachDesc')?.value || '');
+  const sport = document.getElementById('coachSport')?.value || DEFAULT_SPORTS[0];
+  const hourlyRate = +document.getElementById('coachHourlyRate')?.value || 100;
+
+  const imageFile = document.getElementById('coachImage')?.files?.[0];
+  let imageUrl = '';
+  if (imageFile) {
+    try {
+      const base64 = await compressImage(imageFile, 400, 0.7);
+      imageUrl = await uploadImage(base64, 'coaches');
+    } catch (err) {}
+  }
+
+  const newCoach = {
+    name, phone, lat, lng, description: desc, sport, hourly_rate: hourlyRate,
+    owner_id: currentUser.id, image_url: imageUrl
+  };
+
+  try {
+    const { data: savedCoach } = await supabase.from('coaches').insert(newCoach).select().single();
+    if (!savedCoach) throw new Error('لم يتم حفظ المدرب');
+    showToast('تم تسجيل المدرب بنجاح');
+    document.getElementById('registerCoachForm').reset();
+    if (coachMap && coachMarker) {
+      coachMap.setView([24.7136, 46.6753], 13);
+      coachMarker.setLatLng([24.7136, 46.6753]);
+    }
+    await refreshData();
+    switchSection(currentUser.role === 'admin' ? 'adminDashboard' : 'coachDashboard');
+  } catch (err) {
+    console.error(err);
+    showToast('فشل تسجيل المدرب', false);
+  }
+});
+
+// ==================== الحجز المباشر (Book Now) ====================
+document.getElementById('bookNowDirectBtn')?.addEventListener('click', async () => {
+  const type = document.getElementById('bookingType')?.value;
+  const date = document.getElementById('bookingDate')?.value;
+  const time = document.getElementById('bookingTime')?.value;
+  const duration = +document.getElementById('bookingDuration')?.value;
+  const recurringSelect = document.getElementById('bookingRecurring');
+  const recurring = recurringSelect ? recurringSelect.value : 'none';
+  const endDate = recurring !== 'none' ? document.getElementById('recurringEndDate')?.value : null;
+
+  if (recurring !== 'none' && !endDate) { showToast('حدد تاريخ انتهاء التكرار', false); return; }
+
+  let baseData;
+  if (type === 'court') {
+    const courtId = document.getElementById('bookingCourtId')?.value;
+    const court = courts.find(c => c.id === courtId);
+    if (!court) return;
+    const venue = venues.find(v => v.id === court.venue_id);
+    const price = calculateBookingPrice(court, date, time, duration);
+    baseData = { type: 'court', courtId: court.id, courtName: court.name, venueId: court.venue_id, venueName: venue?.name, date, time, duration, price };
+  } else {
+    const coachId = document.getElementById('bookingCoachId')?.value;
+    const coach = coaches.find(c => c.id === coachId);
+    if (!coach) return;
+    const price = coach.hourly_rate * duration;
+    baseData = { type: 'coach', coachId: coach.id, coachName: coach.name, date, time, duration, price };
+  }
+
+  let items = [baseData];
+  let totalAmount = baseData.price;
+  if (recurring !== 'none' && endDate) {
+    const recurringItems = await createRecurringBookings(baseData, recurring, endDate);
+    if (!recurringItems.length) { showToast('لا توجد تواريخ متاحة', false); return; }
+    items = recurringItems;
+    totalAmount = items.reduce((s, i) => s + i.price, 0);
+  }
+
+  pendingBooking = { items, total: totalAmount, appFee: totalAmount * BOOKING_FEE_PERCENTAGE, penaltyBalance: currentUser?.penalty_balance || 0 };
+  document.getElementById('bookingModal').style.visibility = 'hidden';
+  showPaymentModal(pendingBooking);
+});
+
+// ==================== عرض حجوزات العميل ====================
+async function renderCustomerBookings() {
+  if (!currentUser) return;
+  const container = document.getElementById('customerBookingsList');
+  if (!container) return;
+  const { data: myBookings } = await supabase.from('bookings').select('*').eq('customer_id', currentUser.id).order('date', { ascending: false });
+  const { data: mySessions } = await supabase.from('coach_bookings').select('*').eq('customer_id', currentUser.id).order('date', { ascending: false });
+  const currencySymbol = getCurrencySymbol(currentCurrency);
+
+  if ((!myBookings || !myBookings.length) && (!mySessions || !mySessions.length)) {
+    container.innerHTML = '<p>لا توجد حجوزات</p>';
+    return;
+  }
+
+  let html = '';
+  (myBookings || []).forEach(b => {
+    const court = courts.find(c => c.id === b.court_id);
+    const venue = venues.find(v => v.id === b.venue_id);
+    const canRate = (b.status === 'confirmed' || b.status === 'مدفوع') && !b.rated;
+    html += `<div style="border:1px solid #e2e8f0; border-radius:12px; padding:12px; margin-bottom:8px;">
+      <strong>🏟️ ${sanitizeInput(court?.name || '')} (${sanitizeInput(venue?.name || '')})</strong>
+      <p>${b.date} | ${b.time} (${b.duration} ساعة) | ${b.price} ${currencySymbol} | ${b.status}</p>
+      ${canRate ? `<button class="btn-outline btn-sm rate-btn" data-target="${b.venue_id}" data-booking="${b.id}" data-type="venue">تقييم</button>` : ''}
+    </div>`;
+  });
+  (mySessions || []).forEach(s => {
+    const coach = coaches.find(c => c.id === s.coach_id);
+    const canRate = (s.status === 'confirmed' || s.status === 'مدفوع') && !s.rated;
+    html += `<div style="border:1px solid #e2e8f0; border-radius:12px; padding:12px; margin-bottom:8px;">
+      <strong>👤 ${sanitizeInput(coach?.name || '')}</strong>
+      <p>${s.date} | ${s.time} (${s.duration} ساعة) | ${s.price} ${currencySymbol} | ${s.status}</p>
+      ${canRate ? `<button class="btn-outline btn-sm rate-btn" data-target="${s.coach_id}" data-booking="${s.id}" data-type="coach">تقييم</button>` : ''}
+    </div>`;
+  });
+
+  container.innerHTML = html;
+  container.querySelectorAll('.rate-btn').forEach(btn => btn.addEventListener('click', () => openRatingModal(btn.dataset.target, btn.dataset.booking, btn.dataset.type)));
+}
+
+// ==================== إدارة الحجز (تعديل/إلغاء) ====================
+function openManageBookingModal(bookingId, type) {
+  const booking = type === 'court' ? bookings.find(b => b.id === bookingId) : coachBookings.find(b => b.id === bookingId);
+  if (!booking) return;
+  document.getElementById('manageBookingId').value = bookingId;
+  document.getElementById('manageBookingType').value = type;
+  document.getElementById('manageBookingDate').value = booking.date;
+  document.getElementById('manageBookingTime').value = booking.time;
+  document.getElementById('manageBookingDuration').value = booking.duration;
+  document.getElementById('manageBookingTitle').textContent = type === 'court' ? 'تعديل حجز الملعب' : 'تعديل جلسة التدريب';
+  document.getElementById('manageBookingModal').style.visibility = 'visible';
+}
+
+document.getElementById('manageBookingForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const bookingId = document.getElementById('manageBookingId').value;
+  const type = document.getElementById('manageBookingType').value;
+  const newDate = document.getElementById('manageBookingDate').value;
+  const newTime = document.getElementById('manageBookingTime').value;
+  const newDuration = +document.getElementById('manageBookingDuration').value;
+
+  const table = type === 'court' ? 'bookings' : 'coach_bookings';
+  const booking = type === 'court' ? bookings.find(b => b.id === bookingId) : coachBookings.find(b => b.id === bookingId);
+  if (!booking) return;
+
+  // تحقق من التعارض
+  if (type === 'court') {
+    const conflict = await checkCourtConflict(booking.court_id, newDate, newTime, newDuration, bookingId);
+    if (conflict) { showToast('يوجد تعارض مع حجز آخر', false); return; }
+  } else {
+    const conflict = await checkCoachConflict(booking.coach_id, newDate, newTime, newDuration, bookingId);
+    if (conflict) { showToast('يوجد تعارض مع جلسة أخرى', false); return; }
+  }
+
+  // حساب السعر الجديد
+  let newPrice = booking.price;
+  if (type === 'court') {
+    const court = courts.find(c => c.id === booking.court_id);
+    if (court) newPrice = calculateBookingPrice(court, newDate, newTime, newDuration);
+  } else {
+    const coach = coaches.find(c => c.id === booking.coach_id);
+    if (coach) newPrice = coach.hourly_rate * newDuration;
+  }
+
+  await supabase.from(table).update({
+    date: newDate, time: newTime, duration: newDuration,
+    price: newPrice, app_fee: newPrice * BOOKING_FEE_PERCENTAGE
+  }).eq('id', bookingId);
+
+  document.getElementById('manageBookingModal').style.visibility = 'hidden';
+  await refreshData();
+  showToast('تم تعديل الحجز');
+});
+
+async function cancelBooking(bookingId, type) {
+  if (!confirm('إلغاء الحجز؟')) return;
+  const table = type === 'court' ? 'bookings' : 'coach_bookings';
+  await supabase.from(table).update({ status: 'cancelled' }).eq('id', bookingId);
+  await refreshData();
+  showToast('تم إلغاء الحجز');
+}
+
+// ==================== دالة حساب السعر للملعب (مطلوبة) ====================
+function calculateBookingPrice(court, date, time, duration) {
+  const venue = venues.find(v => v.id === court.venue_id);
+  const startHour = parseInt(time.split(':')[0]);
+  let total = 0;
+  for (let i = 0; i < duration; i++) {
+    const h = (startHour + i) % 24;
+    const periodIdx = PERIODS.findIndex(p => h >= p.start && h < p.end);
+    total += (court.pricing || venue.pricing || [50])[periodIdx] || 50;
+  }
+  return total;
+}
+
+// ==================== إنشاء حقل ملعب في التسجيل ====================
+function createCourtField(courtData = null) {
+  const container = document.getElementById('courtsListContainer');
+  if (!container) return;
+  const index = container.children.length;
+  const div = document.createElement('div');
+  div.className = 'court-item';
+  div.innerHTML = `
+    <div style="display:flex;justify-content:space-between;"><h4>ملعب ${index+1}</h4><button type="button" class="btn-outline btn-sm remove-court-btn"><i class="fas fa-times"></i></button></div>
+    <div class="form-group"><label>اسم الملعب</label><input type="text" name="courtName${index}" value="${courtData?.name||''}" required></div>
+    <div class="form-group"><label>نوع الاستخدام</label><select name="courtType${index}" class="court-type-select"><option value="single" ${!courtData?.multi_sport?'selected':''}>رياضة واحدة</option><option value="multi" ${courtData?.multi_sport?'selected':''}>متعدد الرياضات</option></select></div>
+    <div class="single-sport-group" style="${courtData?.multi_sport?'display:none':''}"><label>الرياضة</label><select name="courtSport${index}">${getSportOptions(courtData?.sport)}</select></div>
+    <div class="multi-sport-group" style="${courtData?.multi_sport?'':'display:none'}"><label>الرياضات</label><div class="checkbox-group">${getAllSports().map(s=>`<label><input type="checkbox" name="allowedSport${index}" value="${s}" ${courtData?.allowed_sports?.includes(s)?'checked':''}> ${getSportDisplayName(s)}</label>`).join('')}</div></div>
+    <div class="form-group"><label><input type="checkbox" name="useCustomPricing${index}" ${courtData?.pricing?'checked':''}> تسعير خاص</label></div>
+    <div class="custom-pricing-group" style="${courtData?.pricing?'':'display:none'}"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><div><label>ف1</label><input type="number" name="price1_${index}" value="${courtData?.pricing?.[0]||40}" step="5"></div><div><label>ف2</label><input type="number" name="price2_${index}" value="${courtData?.pricing?.[1]||50}" step="5"></div><div><label>ف3</label><input type="number" name="price3_${index}" value="${courtData?.pricing?.[2]||60}" step="5"></div><div><label>ف4</label><input type="number" name="price4_${index}" value="${courtData?.pricing?.[3]||70}" step="5"></div></div></div>
+  `;
+  container.appendChild(div);
+
+  const typeSelect = div.querySelector('.court-type-select');
+  const pricingCheck = div.querySelector(`[name="useCustomPricing${index}"]`);
+  const pricingGroup = div.querySelector('.custom-pricing-group');
+  typeSelect.addEventListener('change', (e) => {
+    const isMulti = e.target.value === 'multi';
+    div.querySelector('.single-sport-group').style.display = isMulti ? 'none' : 'block';
+    div.querySelector('.multi-sport-group').style.display = isMulti ? 'block' : 'none';
+  });
+  pricingCheck.addEventListener('change', (e) => {
+    pricingGroup.style.display = e.target.checked ? 'block' : 'none';
+  });
+  div.querySelector('.remove-court-btn').addEventListener('click', () => {
+    div.remove();
+    updateCourtIndices();
+  });
+}
+
+function updateCourtIndices() {
+  document.querySelectorAll('.court-item').forEach((item, idx) => {
+    item.querySelector('h4').textContent = `ملعب ${idx+1}`;
+  });
+}
+
+// ==================== الإلغاء التلقائي للدفع المعلق ====================
+async function startPendingPaymentChecker() {
+  setInterval(async () => {
+    const now = new Date().toISOString();
+    const { data: expired } = await supabase.from('pending_payments')
+      .select('*')
+      .lt('expires_at', now);
+
+    if (!expired || !expired.length) return;
+
+    for (let p of expired) {
+      const table = p.type === 'court' ? 'bookings' : 'coach_bookings';
+      const booking = p.type === 'court'
+        ? bookings.find(b => b.id === p.booking_id)
+        : coachBookings.find(b => b.id === p.booking_id);
+
+      if (booking && booking.status === 'pending_payment') {
+        await supabase.from(table).update({ status: 'cancelled' }).eq('id', p.booking_id);
+        const customer = users.find(u => u.id === p.customer_id);
+        if (customer) {
+          const penalty = booking.price || 0;
+          await supabase.from('profiles').update({ penalty_balance: customer.penalty_balance + penalty }).eq('id', customer.id);
+          addNotification(customer.id, `تم إلغاء حجزك لعدم الدفع. تمت إضافة ${penalty} ${getCurrencySymbol(currentCurrency)} كغرامة.`);
+        }
+      }
+    }
+
+    await supabase.from('pending_payments').delete().lt('expires_at', now);
+  }, 60000);
+}
+
+// ==================== دوال التحقق من ساعات العمل ====================
+function isWithinWorkingHours(venue, dateStr, hour) {
+  if (!venue || !venue.working_hours) return true;
+  const dayOfWeek = new Date(dateStr).getDay();
+  const dayKey = ['sun','mon','tue','wed','thu','fri','sat'][dayOfWeek];
+  const wh = venue.working_hours[dayKey];
+  if (!wh || !wh.start || !wh.end) return true;
+  const start = parseInt(wh.start.split(':')[0]);
+  const end = parseInt(wh.end.split(':')[0]);
+  if (end < start) return hour >= start || hour < end;
+  return hour >= start && hour < end;
+}
+
+function isWithinCoachWorkingHours(coachId, dateStr, hour) {
+  // coachAvailability تم بناؤها من جدول coach_availability
+  const availability = coachAvailability[coachId];
+  if (!availability) return true;
+  const dayOfWeek = new Date(dateStr).getDay();
+  const dayKey = ['sun','mon','tue','wed','thu','fri','sat'][dayOfWeek];
+  const wh = availability[dayKey];
+  if (!wh || !wh.start || !wh.end) return true;
+  const start = parseInt(wh.start.split(':')[0]);
+  const end = parseInt(wh.end.split(':')[0]);
+  if (end < start) return hour >= start || hour < end;
+  return hour >= start && hour < end;
+}
+
+// ==================== دوال حساب الساعات المتاحة ====================
+async function getAvailableHoursForCourt(court, dateStr) {
+  const venue = venues.find(v => v.id === court.venue_id);
+  if (!venue) return { available: 0, total: 0 };
+  const { data: dayBookings } = await supabase.from('bookings')
+    .select('*')
+    .eq('court_id', court.id)
+    .eq('date', dateStr)
+    .neq('status', 'cancelled');
+
+  const { data: blackouts } = await supabase.from('blackouts')
+    .select('*')
+    .eq('item_type', 'court')
+    .eq('item_id', court.id)
+    .eq('date', dateStr);
+
+  const bookedSlots = new Array(24).fill(false);
+  (dayBookings || []).forEach(b => {
+    const start = parseInt(b.time.split(':')[0]);
+    for (let i = 0; i < (b.duration || 1); i++) {
+      if (start + i < 24) bookedSlots[start + i] = true;
+    }
+  });
+
+  let available = 0, total = 0;
+  for (let h = 0; h < 24; h++) {
+    if (!isWithinWorkingHours(venue, dateStr, h)) continue;
+    const blackedOut = (blackouts || []).some(b => {
+      if (b.start_hour) {
+        const start = parseInt(b.start_hour.split(':')[0]);
+        return h >= start && h < start + (b.duration || 1);
+      }
+      return true;
+    });
+    if (blackedOut) continue;
+    total++;
+    if (!bookedSlots[h]) available++;
+  }
+  return { available, total };
+}
+
+async function getCoachAvailableHours(coachId, dateStr) {
+  const coach = coaches.find(c => c.id === coachId);
+  if (!coach) return { available: 0, total: 0 };
+  const { data: daySessions } = await supabase.from('coach_bookings')
+    .select('*')
+    .eq('coach_id', coachId)
+    .eq('date', dateStr)
+    .neq('status', 'cancelled');
+
+  const { data: blackouts } = await supabase.from('blackouts')
+    .select('*')
+    .eq('item_type', 'coach')
+    .eq('item_id', coachId)
+    .eq('date', dateStr);
+
+  const bookedSlots = new Array(24).fill(false);
+  (daySessions || []).forEach(b => {
+    const start = parseInt(b.time.split(':')[0]);
+    for (let i = 0; i < (b.duration || 1); i++) {
+      if (start + i < 24) bookedSlots[start + i] = true;
+    }
+  });
+
+  let available = 0, total = 0;
+  for (let h = 0; h < 24; h++) {
+    if (!isWithinCoachWorkingHours(coachId, dateStr, h)) continue;
+    const blackedOut = (blackouts || []).some(b => {
+      if (b.start_hour) {
+        const start = parseInt(b.start_hour.split(':')[0]);
+        return h >= start && h < start + (b.duration || 1);
+      }
+      return true;
+    });
+    if (blackedOut) continue;
+    total++;
+    if (!bookedSlots[h]) available++;
+  }
+  return { available, total };
+}
+
+// ==================== المجموعات المتكررة (إدارة) ====================
+async function cancelRecurringGroup(groupId) {
+  if (!confirm('إلغاء جميع الحجوزات في هذه المجموعة؟')) return;
+  await supabase.from('bookings').update({ status: 'cancelled' }).eq('recurring_group_id', groupId);
+  await supabase.from('coach_bookings').update({ status: 'cancelled' }).eq('recurring_group_id', groupId);
+  await refreshData();
+  showToast('تم إلغاء المجموعة');
+}
+
+function openManageRecurringModal(groupId) {
+  const group = recurringGroups.find(g => g.id === groupId);
+  if (!group) return;
+  const newEndDate = prompt('أدخل تاريخ انتهاء جديد (YYYY-MM-DD):', group.end_date);
+  if (newEndDate) {
+    supabase.from('recurring_groups').update({ end_date: newEndDate }).eq('id', groupId);
+    showToast('تم تحديث المجموعة');
+    refreshData();
+  }
+}
+
+// ==================== تحميل coachAvailability عند الحاجة ====================
+async function loadCoachAvailability(coachId) {
+  const { data } = await supabase.from('coach_availability').select('*').eq('coach_id', coachId);
+  if (!data) return {};
+  const map = {};
+  data.forEach(a => {
+    map[a.day_of_week] = { start: a.start_time, end: a.end_time };
+  });
+  coachAvailability[coachId] = map;
+  return map;
+}
+
+// ==================== دوال إضافية للوحة التحكم (استدعاء سريع) ====================
+window.cancelBooking = cancelBooking;
+window.cancelRecurringGroup = cancelRecurringGroup;
+window.openManageRecurringModal = openManageRecurringModal;
+window.openBlackoutModal = openBlackoutModal;
+window.openCoachAvailabilityModal = openCoachAvailabilityModal;
+window.openTeamModal = openTeamModal;
+window.openStoreModal = openStoreModal;
+window.openProductModal = openProductModal;
+window.openTeamMembersModal = openTeamMembersModal;
+window.createInvitation = createInvitation;
+window.joinInvitation = joinInvitation;
+window.exportAllData = exportAllData;
+window.importAllData = importAllData;
+window.openEditVenueModal = openEditVenueModal;
+window.openCourtModal = openCourtModal;
+window.openCustomerRatingModal = openCustomerRatingModal;
+window.submitVenueReview = submitVenueReview;
+window.submitCoachReview = submitCoachReview;  
+
   // ==================== التهيئة النهائية ====================
   (async function init() {
     showLoader();
