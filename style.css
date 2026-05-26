@@ -95,12 +95,10 @@ input:focus, select:focus, textarea:focus { border-color:#38bdf8; outline:none; 
 .loader { border:3px solid #f3f3f3; border-top:3px solid #38bdf8; border-radius:50%; width:40px; height:40px; animation:spin 1s linear infinite; margin:20px auto; }
 @keyframes spin { 0% { transform:rotate(0deg); } 100% { transform:rotate(360deg); } }
 
-/* سلة الحجوزات */
 .cart-item { display:flex; justify-content:space-between; align-items:center; padding:12px; border-bottom:1px solid #e2e8f0; }
 .cart-item button { background:none; border:none; color:#ef4444; cursor:pointer; font-size:1.2rem; }
 #cartTotal { font-weight:700; color:#38bdf8; }
 
-/* ----- إضافات المدربين والميزات السابقة ----- */
 .coach-card { background:white; border-radius:20px; overflow:hidden; box-shadow:0 8px 18px rgba(0,0,0,0.05); border:1px solid #f1f5f9; transition: transform 0.2s; }
 .coach-card:hover { transform: translateY(-4px); }
 .coach-img { height:160px; background-size:cover; background-position:center; position:relative; }
@@ -137,13 +135,6 @@ input:focus, select:focus, textarea:focus { border-color:#38bdf8; outline:none; 
 
 #toggleLangBtn { margin: 0 8px; }
 
-#manualLocationInput::placeholder { color: #94a3b8; font-size: 0.9rem; }
-#searchLocationBtn, #resetLocationBtn { width: auto; padding: 8px 16px; }
-#penaltyNotice { font-size: 0.9rem; color: #92400e; }
-#penaltyDisplay p { margin: 4px 0; font-weight: 600; }
-#paymentMethodSelect { margin-bottom: 16px; }
-
-/* ----- أنماط جديدة للمتجر والدعوات والفرق ----- */
 .store-product-card { background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 8px 18px rgba(0,0,0,0.05); border: 1px solid #f1f5f9; transition: transform 0.2s; }
 .store-product-card:hover { transform: translateY(-4px); }
 .store-product-img { height: 180px; background-size: contain; background-repeat: no-repeat; background-position: center; background-color: #f1f5f9; }
